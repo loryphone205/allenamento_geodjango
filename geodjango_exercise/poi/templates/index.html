@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Leaflet + Django</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+</head>
+<body>
+  <div id="map" style="height: 90vh;"></div>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([45.0, 12.0], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    loadPoints();
+
+    // Load existing points on map initialization
+    async function loadPoints() {
+      try {
+        const resp = await fetch('http://localhost:8000/api/pois/');
+        const geojson = await resp.json();
+        if (geojson.type === 'FeatureCollection') {
+          geojson.features.forEach(addFeatureToMap);
+        } else {
+          console.error('Unexpected GeoJSON format:', geojson);
+        }
+      } catch (err) {
+        console.error('Error loading points:', err);
+      }
+    }
+
+    function addFeatureToMap(feature) {
+      // pull id from the root
+      const featureId = feature.id;
+      if (featureId == null) {
+        console.error('Missing feature.id', feature);
+        return;
+      }
+
+      // pull name & description from properties
+      const name = feature.properties?.name || 'No name';
+      const description = feature.properties?.description || 'No description';
+
+      // pull coords
+      const [lng, lat] = feature.geometry.coordinates;
+
+      // create & add marker
+      const marker = L.marker([lat, lng]).addTo(map);
+
+      // bind popup + delete button
+      const html = `
+        <div>
+          <strong>${name}</strong><br/>
+          <em>${description}</em><br/>
+          <button id="delete-${featureId}" type="button">Delete</button>
+        </div>
+      `;
+      marker.bindPopup(html);
+
+      // wire up delete on popup open
+      marker.on('popupopen', () => {
+        document
+          .getElementById(`delete-${featureId}`)
+          .addEventListener('click', () => deleteLocation(featureId, marker));
+      });
+
+      return marker;
+    }
+
+
+    map.on('click', async (e) => {
+      const name = prompt('Enter name for this point:');
+      if (!name) return;
+      const description = prompt('Enter description for this point:');
+      if (description === null) return;
+
+      const payload = {
+        name,
+        description,
+        location: {
+          type: 'Point',
+          coordinates: [e.latlng.lng, e.latlng.lat]
+        }
+      };
+
+      let feature;
+      try {
+        const resp = await fetch('http://localhost:8000/api/pois/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        feature = await resp.json();
+      } catch (err) {
+        console.error('Error saving location:', err);
+        return;
+      }
+
+      // feature.id now defined
+      const newMarker = addFeatureToMap(feature);
+      if (newMarker) newMarker.openPopup();
+    });
+
+    async function deleteLocation(id, layer) {
+      try {
+        const resp = await fetch(`http://localhost:8000/api/pois/${id}/`, {
+          method: 'DELETE'
+        });
+        if (resp.ok) {
+          map.removeLayer(layer);
+        } else {
+          console.error('Failed to delete location', resp.statusText);
+        }
+      } catch (err) {
+        console.error('Error deleting location:', err);
+      }
+    }
+
+  </script>
+</body>
+</html>
